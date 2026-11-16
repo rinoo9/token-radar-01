@@ -1,3 +1,7 @@
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/rinoo9/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard)
+[![reward](https://make.fun/badge/token-radar-01/rinoo9/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01)
+
 # Token Radar — make.fun bounty token-radar-01
 
 A radar of pre-token protocols, ranked by implied value, with a farm plan for each
@@ -72,7 +76,6 @@ and a filtered view.
 
 ## Status
 
-Built and verified locally (see the verification script in the build notes).
-Screenshots are the starter's placeholders until real ones are taken from this
-dashboard in a browser. The GitHub repository under **rinoo9** and the make.fun
-submission are still to be done, by Muhammad.
+Built and verified locally. The three screenshots in `screenshots/` are real
+captures of this dashboard, served from GitHub Pages. The entry is submitted to
+the [make.fun bounty](https://make.fun/bounty/token-radar-01) by Muhammad.
