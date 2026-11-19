@@ -27,19 +27,31 @@ in `.makefun/owner.json` (the wallet the repo is claimed by).
 - `screenshots/` — board, detail and filtered views
 - `dossier.json` — built with the vendored `vendor/makefun-board.ts`
 
-## The model (radar-2)
+## The model (radar-3)
 
 Implied value is what the market already pays for the same kind of protocol,
-adjusted for momentum, age and reach. Nothing names a protocol.
+adjusted for size, momentum, age, reach and category headroom. Nothing names a
+protocol.
 
 ```
-peer ratio  = median mcap/TVL of tokened protocols in the same category
-              (at least 3 peers, else the global median), clamped to 0.03x–1.20x
-implied     = round( tvl_usd x peer_ratio
-              x (1 + clamp(change_7d, -30, +40) / 100 x 0.5)
-              x (0.70 + 0.30 x sqrt(min(age_days, 1460) / 1460))
-              x (1 + 0.02 x min(chains - 1, 5)) )
+peer ratio  = each tokened peer's mcap/TVL clamped to 0.03x–1.20x, then the
+              category median shrunk toward the global median (0.2138x) by peer
+              count: (n x category + 3 x global) / (n + 3), clamped to 0.03x–1.20x
+size        = (tvl_usd / $100M) ^ -0.25, clamped to 0.50x–2.00x
+momentum    = 1 + 0.40 x clamp(change_7d, -30, +40) / 100
+                  + 0.40 x clamp(change_7d - category median 7d, -30, +40) / 100
+implied     = round( tvl_usd x peer_ratio x size x momentum
+              x (0.60 + 0.40 x sqrt(min(age_days, 1460) / 1460))
+              x (1 + 0.02 x min(chains - 1, 5))
+              x (0.85 + 0.30 x (1 - share of category TVL already tokened))
+              x (1 + 0.10 x sqrt(protocol share of category TVL)) )
 ```
+
+The size term follows the snapshot itself: median mcap/TVL falls from 0.65x
+under $10M to 0.01x over $10B (log-log slope about -0.48), and the model
+applies half that slope. Stablecoin issuers get no extra discount: their
+peers' market caps are already governance-token caps per dollar of stablecoins
+outstanding, so the peer ratio already carries that discount.
 
 Age is days since `listed_at` — how long a protocol has run with no token on
 record. "Records no token" is the claim throughout: the snapshot is DefiLlama's
