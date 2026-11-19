@@ -27,7 +27,7 @@ in `.makefun/owner.json` (the wallet the repo is claimed by).
 - `screenshots/` — board, detail and filtered views
 - `dossier.json` — built with the vendored `vendor/makefun-board.ts`
 
-## The model (radar-3)
+## The model (radar-4)
 
 Implied value is what the market already pays for the same kind of protocol,
 adjusted for size, momentum, age, reach and category headroom. Nothing names a
@@ -39,13 +39,24 @@ peer ratio  = each tokened peer's mcap/TVL clamped to 0.03x–1.20x, then the
               count: (n x category + 3 x global) / (n + 3), clamped to 0.03x–1.20x
 size        = (tvl_usd / $100M) ^ -0.25, clamped to 0.50x–2.00x
 momentum    = 1 + 0.40 x clamp(change_7d, -30, +40) / 100
-                  + 0.40 x clamp(change_7d - category median 7d, -30, +40) / 100
+                  + 0.40 x clamp(change_7d - category PRE-TOKEN median 7d, -30, +40) / 100
 implied     = round( tvl_usd x peer_ratio x size x momentum
               x (0.60 + 0.40 x sqrt(min(age_days, 1460) / 1460))
               x (1 + 0.02 x min(chains - 1, 5))
               x (0.85 + 0.30 x (1 - share of category TVL already tokened))
               x (1 + 0.10 x sqrt(protocol share of category TVL)) )
 ```
+
+radar-4 fixes one place where radar-3's code disagreed with its own method:
+relative momentum now measures a pre-token protocol against its category's
+**pre-token** median 7d change (global pre-token median -6.8%), not the median
+over all the category's protocols, tokened ones included. A tokened protocol's
+TVL moves with its token's price; a pre-token protocol's TVL moves with
+deposits, so the old median mixed two different dynamics and, in a week when
+tokened protocols fell hard, handed every pre-token row in the category a free
+boost for standing still. Where no pre-token protocol in a category reports a
+7d change, the all-protocol median stands in and the row records that it is
+the fallback. Each row carries which median it used (`cat_median_pre_token`).
 
 The size term follows the snapshot itself: median mcap/TVL falls from 0.65x
 under $10M to 0.01x over $10B (log-log slope about -0.48), and the model
@@ -60,11 +71,13 @@ estimate, not a price and not a prediction that a token will launch.
 
 ## Farm plans
 
-Each row carries five steps, derived from the protocol's own category, chains,
+Each row carries six steps, derived from the protocol's own category, chains,
 TVL and age: a fresh-wallet setup, the category's main action with a concrete
-capital amount, a weekly recurring action, a hold period, and a risk note with
-the actual risk for that kind of protocol. Gas costs follow the main chain
-(Ethereum is dear, Solana and L2s are cheap).
+capital amount, a weekly recurring action, a hold period, what to do when the
+token actually launches (claim only from the link the protocol itself
+publishes, never pay a fee to claim, unstake after the snapshot date it
+names), and a risk note with the actual risk for that kind of protocol. Gas
+costs follow the main chain (Ethereum is dear, Solana and L2s are cheap).
 
 ## Run it
 
@@ -89,5 +102,5 @@ and a filtered view.
 ## Status
 
 Built and verified locally. The three screenshots in `screenshots/` are real
-captures of this dashboard, served from GitHub Pages. The entry is submitted to
-the [make.fun bounty](https://make.fun/bounty/token-radar-01) by Muhammad.
+captures of this dashboard, rendered from the built output on this machine.
+The entry is submitted to the [make.fun bounty](https://make.fun/bounty/token-radar-01) by Muhammad.

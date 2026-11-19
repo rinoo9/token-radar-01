@@ -1,11 +1,20 @@
-// The token radar's model (radar-3): one snapshot of the protocol universe in, one ranked
-// board out. radar-2 valued every protocol at its category's peer ratio (or the global
+// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked
+// board out. radar-3 valued every protocol at its category's peer ratio (or the global
 // median when the category had fewer than 3 priced peers), times growth, maturity and
 // chain reach — and the top of its board was nearly a TVL table: Risk Curators and
 // Onchain Capital Allocator, the two thinnest categories at the top, both collapsed to
 // the global 0.214x, so the biggest TVLs won by default. radar-3 keeps the same idea
 // (what the market already pays for the same kind of protocol) and fixes the places
-// where radar-2 ignored what the snapshot actually says:
+// where radar-2 ignored what the snapshot actually says. radar-4 keeps radar-3's
+// model and fixes one place where radar-3's own code disagreed with its method:
+// its relative momentum compared a pre-token protocol's growth against its
+// category's median over ALL protocols, tokened ones included, while its method
+// said the pre-token median. A tokened protocol's TVL moves with its token's
+// price; a pre-token protocol's TVL moves with deposits. radar-4 measures
+// relative momentum against the category's pre-token median, falling back to the
+// all-protocol median only where no pre-token protocol reports a 7d change, and
+// each row records which median it used. radar-4 also adds the farm plan's sixth
+// step: what to do when the token actually launches.
 //
 //   peer ratio   = for each category, the median mcap/TVL of its tokened protocols,
 //                  with each peer's ratio clamped to [0.03, 1.20] BEFORE the median,
@@ -29,11 +38,21 @@
 //                  conservative and does not double-count what the category median
 //                  already carries. The biggest rows are halved; the smallest double.
 //   momentum     = 1 + 0.40 x clamp(change_7d, -30, +40)/100
-//                      + 0.40 x clamp(change_7d - cat_median_7d, -30, +40)/100.
+//                      + 0.40 x clamp(change_7d - cat_median_7d_pre, -30, +40)/100.
 //                  The second term is RELATIVE momentum: growth against the
-//                  category's own median 7d change (pre-token median -6.8%), so
-//                  growing in a shrinking category counts more than growing with
-//                  the crowd. Range 0.76-1.32. The snapshot's wildest week,
+//                  category's own PRE-TOKEN median 7d change (global pre-token
+//                  median -6.8%), so growing in a shrinking category counts more
+//                  than growing with the crowd. radar-3 measured it against the
+//                  median over ALL the category's protocols, tokened ones
+//                  included — but a tokened protocol's TVL moves with its token's
+//                  price, while a pre-token protocol's TVL moves with deposits,
+//                  so the all-protocol median mixed two different dynamics and,
+//                  in a week when tokened protocols fell hard, handed every
+//                  pre-token row in the category a free boost for standing still.
+//                  radar-4 compares a pre-token protocol against its own kind.
+//                  When no pre-token protocol in a category reports a 7d change,
+//                  the all-protocol median is used instead and the row says so.
+//                  Range 0.76-1.32. The snapshot's wildest week,
 //                  +4448% for one small Yield protocol, is clamped to +40 on both
 //                  terms and lands mid-board, not at the top. A missing 7d change
 //                  scores 0 on both terms.
@@ -147,7 +166,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** Board size: watchlist (40) + rankable protocols above the floor the watchlist leaves
  *  out + the best rankable protocols below the floor, by implied value. */
@@ -193,6 +212,7 @@ export interface BoardRow {
     headroom_multiplier: number;
     dominance_multiplier: number;
     cat_median_change: number;
+    cat_median_pre_token: boolean;
     cat_tokened_share: number;
     cat_share: number;
     age_days: number | null;
@@ -225,6 +245,7 @@ export interface RadarRow {
   dominance_multiplier: number;
   rel_growth_pct: number;
   cat_median_change: number;
+  cat_median_pre_token: boolean;
   cat_tokened_share: number;
   cat_share: number;
   farm_steps: string[];
@@ -342,26 +363,33 @@ export interface CategoryStats {
   total_tvl: number;
   tokened_share: number;
   median_change: number;
+  /** The median 7d change over the category's PRE-TOKEN protocols only, or null when none reports one. */
+  median_change_pre: number | null;
 }
 
 /** The per-category figures the model needs, computed from the snapshot at run time. */
 export function categoryStats(snapshot: Snapshot): Map<string, CategoryStats> {
-  const acc = new Map<string, { tvl: number; tokTvl: number; changes: number[] }>();
+  const acc = new Map<string, { tvl: number; tokTvl: number; changes: number[]; preChanges: number[] }>();
   for (const p of snapshot.protocols) {
     const key = p.category ?? 'Other';
-    const a = acc.get(key) ?? { tvl: 0, tokTvl: 0, changes: [] };
+    const a = acc.get(key) ?? { tvl: 0, tokTvl: 0, changes: [], preChanges: [] };
     a.tvl += p.tvl_usd;
     if (!isPreToken(p)) a.tokTvl += p.tvl_usd;
-    if (p.change_7d !== null) a.changes.push(p.change_7d);
+    if (p.change_7d !== null) {
+      a.changes.push(p.change_7d);
+      if (isPreToken(p)) a.preChanges.push(p.change_7d);
+    }
     acc.set(key, a);
   }
   const out = new Map<string, CategoryStats>();
   for (const [key, a] of acc) {
     a.changes.sort((x, y) => x - y);
+    a.preChanges.sort((x, y) => x - y);
     out.set(key, {
       total_tvl: a.tvl,
       tokened_share: a.tvl > 0 ? a.tokTvl / a.tvl : 0,
       median_change: median(a.changes, 0),
+      median_change_pre: a.preChanges.length > 0 ? median(a.preChanges, 0) : null,
     });
   }
   return out;
@@ -425,6 +453,7 @@ export function impliedValue(
   headroomMult: number;
   dominanceMult: number;
   catMedianChange: number;
+  catMedianPreToken: boolean;
   catTokenedShare: number;
   catShare: number;
   age: number | null;
@@ -435,15 +464,21 @@ export function impliedValue(
   const peerRatio = peer !== undefined ? peer.ratio : peers.global;
   const rawPeerRatio = peer !== undefined ? peer.raw : null;
   const peerCount = peer !== undefined ? peer.peers : 0;
-  const stat = stats.get(key) ?? { total_tvl: 0, tokened_share: 0, median_change: 0 };
+  const stat = stats.get(key) ?? { total_tvl: 0, tokened_share: 0, median_change: 0, median_change_pre: null };
   const catShare = stat.total_tvl > 0 ? protocol.tvl_usd / stat.total_tvl : 0;
   // Size: the market pays less mcap per TVL dollar as protocols get bigger; half the
   // snapshot's fitted log-log slope (-0.48), anchored at $100M, clamped [0.50, 2.00].
   const sizeMult = Math.min(model.size_max, Math.max(model.size_min, Math.pow(protocol.tvl_usd / model.size_ref_usd, -model.size_exponent)));
-  // Momentum: absolute 7d growth plus growth relative to the category's own median
-  // week. A missing 7d change scores 0 on both terms.
+  // Momentum: absolute 7d growth plus growth relative to the category's own PRE-TOKEN
+  // median week — a pre-token protocol is judged against its own kind, whose TVL moves
+  // with deposits, not against tokened protocols, whose TVL moves with token prices.
+  // Where no pre-token protocol in the category reports a 7d change, the all-protocol
+  // median stands in and the row records that it is the fallback. A missing 7d change
+  // scores 0 on both terms.
+  const catMedianChange = stat.median_change_pre ?? stat.median_change;
+  const catMedianPreToken = stat.median_change_pre !== null;
   const growthPct = protocol.change_7d === null ? 0 : Math.min(model.growth_cap, Math.max(model.growth_floor, protocol.change_7d));
-  const relGrowthPct = protocol.change_7d === null ? 0 : Math.min(model.rel_cap, Math.max(model.rel_floor, protocol.change_7d - stat.median_change));
+  const relGrowthPct = protocol.change_7d === null ? 0 : Math.min(model.rel_cap, Math.max(model.rel_floor, protocol.change_7d - catMedianChange));
   const momentumMult = 1 + (growthPct / 100) * model.momentum_abs_weight + (relGrowthPct / 100) * model.momentum_rel_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + model.maturity_range * Math.sqrt(Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days);
@@ -451,7 +486,7 @@ export function impliedValue(
   const headroomMult = model.headroom_floor + model.headroom_range * (1 - stat.tokened_share);
   const dominanceMult = 1 + model.dominance_step * Math.sqrt(Math.max(0, catShare));
   const implied = Math.max(1, Math.round(protocol.tvl_usd * peerRatio * sizeMult * momentumMult * maturityMult * chainMult * headroomMult * dominanceMult));
-  return { implied, peerRatio, rawPeerRatio, peerCount, growthPct, relGrowthPct, momentumMult, sizeMult, maturityMult, chainMult, headroomMult, dominanceMult, catMedianChange: stat.median_change, catTokenedShare: stat.tokened_share, catShare, age };
+  return { implied, peerRatio, rawPeerRatio, peerCount, growthPct, relGrowthPct, momentumMult, sizeMult, maturityMult, chainMult, headroomMult, dominanceMult, catMedianChange, catMedianPreToken, catTokenedShare: stat.tokened_share, catShare, age };
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -527,7 +562,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       // cat_median_change, cat_tokened_share and cat_share are stored unrounded,
       // like peer_ratio: the dashboard recomputes the row from them, and rounding
       // them would move a $500M implied value by hundreds of dollars.
+      // cat_median_pre_token records whether that median is the category's pre-token
+      // median or the all-protocol fallback, so the dashboard can say which.
       cat_median_change: s.catMedianChange,
+      cat_median_pre_token: s.catMedianPreToken,
       cat_tokened_share: s.catTokenedShare,
       cat_share: s.catShare,
       age_days: s.age,
@@ -646,11 +684,12 @@ function riskFor(p: SnapshotProtocol, capital: number, chain: string): string {
 }
 
 /**
- * A protocol's farm plan: five steps, each an action with a cost and a time. The plan is
+ * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is
  * derived from the protocol's own record (category, chains, TVL, age, and its share of
  * its category's TVL), never from a hand-written list of names. The main action names
  * the protocol's share of its category so the farmer can see how central it is; the
- * hold step states how long the protocol has already run with no token.
+ * hold step states how long the protocol has already run with no token; the last two
+ * steps say what to do when the token actually launches, and what can go wrong.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null, catShare: number): FarmStep[] {
   const chain = chainOf(p);
@@ -684,6 +723,11 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, catShare: num
       text: `${ageText} Hold the position for at least ${hold} days so the activity is counted in more than one snapshot, and check the protocol's own points or rewards page each month, claiming only from the link it publishes.`,
       cost: `the $${capital} stays in the position`,
       time: `${hold} days`,
+    },
+    {
+      text: `When a token launches, claim only from the link ${p.name} itself publishes on its own page, never from a reply, an ad or a direct message, and never pay a fee to claim. Unstake or withdraw the $${capital} after the snapshot date the protocol names, or after the ${hold}-day hold if it names none.`,
+      cost: 'nothing to claim, and never pay a claim fee',
+      time: '15 minutes when the launch is announced',
     },
     {
       text: riskFor(p, capital, chain),
@@ -736,6 +780,7 @@ export function radarRow(row: BoardRow): RadarRow {
     dominance_multiplier: row.model.dominance_multiplier,
     rel_growth_pct: row.model.rel_growth_pct,
     cat_median_change: row.model.cat_median_change,
+    cat_median_pre_token: row.model.cat_median_pre_token,
     cat_tokened_share: row.model.cat_tokened_share,
     cat_share: row.model.cat_share,
     farm_steps: row.farm_steps,
