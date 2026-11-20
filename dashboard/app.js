@@ -1,4 +1,4 @@
-// Token Radar, radar-4 dashboard. Reads window.RADAR (written beside dashboard/ by
+// Token Radar, radar-5 dashboard. Reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, filters, a per-protocol detail drawer with the
 // model's own inputs and the protocol's farm plan, and the methodology. No network:
 // every byte it shows is in data.js. Farm steps come from data.js, so the page shows
@@ -282,6 +282,7 @@
           return el('tr', null, el('td', { text: p.category }), el('td', { class: 'num', text: p.raw_ratio === null ? 'n/a' : p.raw_ratio.toFixed(3) + 'x' }), el('td', { class: 'num', text: String(p.peers) }), el('td', { class: 'num', text: p.ratio.toFixed(3) + 'x' }));
         }))
       ),
+      el('p', { class: 'sub', text: 'Farm plans are derived from each protocol\u2019s own figures, never from a hand-written list: the capital follows its TVL, the hold follows its age, and the action follows its category. A lending plan borrows a fifth of the capital supplied, so the borrow always stays under the quarter its own risk step demands, and a DEX plan\u2019s range is a band 20% above and below the pool\u2019s current price, never a fixed dollar range.' }),
       el('p', { class: 'sub', text: 'Disclaimer: every protocol here records no token in the snapshot — that is DefiLlama\u2019s record, never proof it has none. Implied value is this entry\u2019s own estimate of what a token would be worth if the protocol\u2019s record stayed as it is. It is not a price, not a prediction that a token will launch, and not financial advice. Farming costs gas and puts capital at risk; the farm plan states the risk for each protocol.' })
     );
   }

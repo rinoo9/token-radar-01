@@ -1,5 +1,9 @@
-// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked
-// board out. radar-3 valued every protocol at its category's peer ratio (or the global
+// The token radar's model (radar-5): one snapshot of the protocol universe in, one ranked
+// board out. radar-5 keeps radar-4's scoring exactly and fixes the farm plans, where
+// two instructions disagreed with themselves: the DEX plan's fixed "$40-$60 range"
+// is now a band 20% above and below the pool's current price, and the lending
+// plan's fixed $20 borrow is now a fifth of the capital supplied, so it stays
+// under the quarter its own risk step demands. See the farmSteps comment below.
 // median when the category had fewer than 3 priced peers), times growth, maturity and
 // chain reach — and the top of its board was nearly a TVL table: Risk Curators and
 // Onchain Capital Allocator, the two thinnest categories at the top, both collapsed to
@@ -166,7 +170,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** Board size: watchlist (40) + rankable protocols above the floor the watchlist leaves
  *  out + the best rankable protocols below the floor, by implied value. */
@@ -595,6 +599,13 @@ function capitalFor(p: SnapshotProtocol): number {
   return 50;
 }
 
+/** How much a lending plan borrows against the capital supplied: a fifth of it, so
+ *  the borrow always stays under the quarter the plan's own risk step demands.
+ *  A fixed $20 borrow was 40% of a $50 supply and 8% of a $250 one. */
+function borrowFor(capital: number): number {
+  return Math.max(10, Math.round(capital * 0.2));
+}
+
 /** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
 function holdDaysFor(age: number | null): number {
   if (age === null) return 30;
@@ -632,8 +643,8 @@ function familyOf(p: SnapshotProtocol): string {
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const name = p.name;
   switch (familyOf(p)) {
-    case 'lending': return `Supply $${capital} of USDC to ${name} on ${chain}, then borrow $20 of USDC against it so the position shows both sides.`;
-    case 'dex': return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} in the $40-$60 range, and keep the position open.`;
+    case 'lending': return `Supply $${capital} of USDC to ${name} on ${chain}, then borrow $${borrowFor(capital)} of USDC against it so the position shows both sides.`;
+    case 'dex': return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} in a band 20% above and below the pool's current price, and keep the position open.`;
     case 'yield': return `Deposit $${capital} of USDC into ${name}'s highest-TVL vault on ${chain} and leave the yield compounding.`;
     case 'bridge': return `Bridge $${capital} of USDC to ${chain} through ${name}, then use the bridged funds once inside its app.`;
     case 'staking': return `Stake $${capital} of the chain's staking asset through ${name} on ${chain} and keep the receipt token.`;
@@ -650,7 +661,7 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
 /** The category's weekly recurring action. */
 function weeklyFor(p: SnapshotProtocol, capital: number, chain: string): string {
   switch (familyOf(p)) {
-    case 'lending': return `Each week, repay $5 of the borrow and re-supply $5, so the position shows fresh activity without new capital.`;
+    case 'lending': return `Each week, repay a quarter of the borrow and re-supply the same amount, so the position shows fresh activity without new capital.`;
     case 'dex': return `Each week, swap $10 through ${p.name} on ${chain} and collect the fees the pool pays out.`;
     case 'yield': return `Each week, claim the vault yield on ${chain} and re-deposit it instead of withdrawing it.`;
     case 'bridge': return `Each month, bridge $25 of USDC through ${p.name} to ${chain} and back, keeping the route active.`;
@@ -668,8 +679,8 @@ function weeklyFor(p: SnapshotProtocol, capital: number, chain: string): string 
 /** The category's main risk, stated plainly so the plan is not a slogan. */
 function riskFor(p: SnapshotProtocol, capital: number, chain: string): string {
   switch (familyOf(p)) {
-    case 'lending': return `Risk: a sharp price fall can liquidate the $20 borrow, so keep the borrow under a quarter of the $${capital} supply and never borrow the same asset you supplied.`;
-    case 'dex': return `Risk: the pool's price can move out of the $40-$60 range and stop earning fees, so check the range weekly and reset it once if it drifts.`;
+    case 'lending': return `Risk: a sharp price fall can liquidate the $${borrowFor(capital)} borrow, so keep the borrow at a fifth of the $${capital} supply and never borrow the same asset you supplied.`;
+    case 'dex': return `Risk: the pool's price can move outside the ±20% band around the price you entered at and stop earning fees, so check the band weekly and reset it once if it drifts.`;
     case 'yield': return `Risk: the vault's strategy can lose value in a fast market, so treat the $${capital} as at-risk capital and never farm with money you need back.`;
     case 'bridge': return `Risk: a bridge can pause withdrawals, so never bridge more than the $${capital} at once and keep a second route off ${chain} in mind.`;
     case 'staking': return `Risk: the staking asset can fall while it is locked, so the $${capital} can be worth less when you unstake than when you staked it.`;
@@ -690,6 +701,16 @@ function riskFor(p: SnapshotProtocol, capital: number, chain: string): string {
  * the protocol's share of its category so the farmer can see how central it is; the
  * hold step states how long the protocol has already run with no token; the last two
  * steps say what to do when the token actually launches, and what can go wrong.
+ * radar-5 fixes two places where the farm plan's own numbers disagreed with
+ * themselves: a DEX plan told the farmer to provide liquidity "in the $40-$60
+ * range", a fixed dollar range that is meaningless for an arbitrary pool —
+ * the range is now a band 20% above and below the pool's current price, in
+ * both the action and the risk step; and a lending plan told the farmer to
+ * borrow a fixed $20 against a $50 supply (40% of it) while its own risk
+ * step said to keep the borrow under a quarter of the supply — the borrow is
+ * now a fifth of the capital supplied ($10 on $50, $20 on $100, $30 on $150,
+ * $50 on $250), the weekly step repays a quarter of that borrow, and the
+ * risk step states the fifth, so the three steps finally agree.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null, catShare: number): FarmStep[] {
   const chain = chainOf(p);

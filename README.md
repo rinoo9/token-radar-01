@@ -27,7 +27,21 @@ in `.makefun/owner.json` (the wallet the repo is claimed by).
 - `screenshots/` — board, detail and filtered views
 - `dossier.json` — built with the vendored `vendor/makefun-board.ts`
 
-## The model (radar-4)
+## The model (radar-5)
+
+radar-5 keeps radar-4's scoring exactly and fixes the farm plans, where two
+instructions disagreed with themselves: a DEX plan told the farmer to provide
+liquidity "in the $40-$60 range", a fixed dollar range that is meaningless for
+an arbitrary pool — the range is now a band 20% above and below the pool's
+current price, in both the action and the risk step; and a lending plan told
+the farmer to borrow a fixed $20 against a $50 supply (40% of it) while its
+own risk step said to keep the borrow under a quarter of the supply — the
+borrow is now a fifth of the capital supplied ($10 on $50, $20 on $100, $30
+on $150, $50 on $250), the weekly step repays a quarter of that borrow, and
+the risk step states the fifth, so the three steps finally agree. The change
+touches the farm plans of the 25 DEX rows and the 28 lending rows on the
+board; implied values and ranks are unchanged, because the scoring did not
+move.
 
 Implied value is what the market already pays for the same kind of protocol,
 adjusted for size, momentum, age, reach and category headroom. Nothing names a
