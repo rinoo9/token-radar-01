@@ -1,5 +1,14 @@
-// The token radar's model (radar-5): one snapshot of the protocol universe in, one ranked
-// board out. radar-5 keeps radar-4's scoring exactly and fixes the farm plans, where
+// The token radar's model (radar-6): one snapshot of the protocol universe in, one ranked
+// board out. radar-6 keeps radar-5's scoring and adds a signal-confidence factor: two
+// of the model's inputs can be missing from a protocol's record — its 7d change (the
+// momentum input) and its listing date (the age input) — and until now a missing
+// input was silently replaced by a guess (0% growth, a 365-day age) and scored as
+// if it were known. A row with one input missing now carries a 0.97x confidence
+// multiplier, a row with both missing 0.94x, and each row records which inputs are
+// missing, so a guessed row can no longer outrank a fully-measured neighbour on
+// borrowed certainty. In this snapshot 14 of the 240 board rows carry the 0.97x
+// discount (2 missing a 7d change, 12 missing a listing date, none missing both).
+// radar-5 keeps radar-4's scoring exactly and fixes the farm plans, where
 // two instructions disagreed with themselves: the DEX plan's fixed "$40-$60 range"
 // is now a band 20% above and below the pool's current price, and the lending
 // plan's fixed $20 borrow is now a fifth of the capital supplied, so it stays
@@ -75,8 +84,15 @@
 //   dominance    = 1 + 0.10 x sqrt(protocol TVL / category TVL). The protocol that
 //                  IS its category's TVL is the category's flagship launch; a 1%
 //                  share barely moves it, a 94% share adds the full 10%.
+//   confidence   = 1.00 when the snapshot carries both the 7d change and the
+//                  listing date, 0.97 when one of them is missing, 0.94 when both
+//                  are. A missing input is still replaced by its neutral guess
+//                  (0% growth, a 365-day age) so the row can be scored at all, but
+//                  the guess is no longer presented as knowledge: the row is
+//                  discounted for the input it does not have, and it names the
+//                  missing inputs, so the dashboard can say which.
 //   implied      = max(1, round(tvl x peer_ratio x size x momentum x maturity
-//                  x chainMult x headroom x dominance))
+//                  x chainMult x headroom x dominance x confidence))
 //
 // Stablecoin issuers: NO extra discount, decided from the category field only and
 // never by protocol name. A stablecoin issuer's TVL is the stablecoins
@@ -142,6 +158,10 @@ export interface ModelConstants {
   headroom_floor: number;
   headroom_range: number;
   dominance_step: number;
+  /** The confidence multiplier for a row with exactly one model input missing. */
+  confidence_missing_one: number;
+  /** The confidence multiplier for a row with both model inputs missing. */
+  confidence_missing_both: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -167,10 +187,12 @@ export const MODEL: ModelConstants = {
   headroom_floor: 0.85,
   headroom_range: 0.3,
   dominance_step: 0.1,
+  confidence_missing_one: 0.97,
+  confidence_missing_both: 0.94,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** Board size: watchlist (40) + rankable protocols above the floor the watchlist leaves
  *  out + the best rankable protocols below the floor, by implied value. */
@@ -220,6 +242,8 @@ export interface BoardRow {
     cat_tokened_share: number;
     cat_share: number;
     age_days: number | null;
+    confidence_multiplier: number;
+    missing_inputs: string[];
   };
   farm_steps: string[];
 }
@@ -252,6 +276,8 @@ export interface RadarRow {
   cat_median_pre_token: boolean;
   cat_tokened_share: number;
   cat_share: number;
+  confidence_multiplier: number;
+  missing_inputs: string[];
   farm_steps: string[];
 }
 
@@ -285,6 +311,8 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  /** Board rows whose snapshot record carries every model input (no discount). */
+  full_data_rows: number;
   global_peer_ratio: number;
   peer_ratios: PeerRatio[];
   rows: RadarRow[];
@@ -461,6 +489,8 @@ export function impliedValue(
   catTokenedShare: number;
   catShare: number;
   age: number | null;
+  confidenceMult: number;
+  missingInputs: string[];
 } {
   const age = ageDays(asOf, protocol.listed_at);
   const key = protocol.category ?? 'Other';
@@ -489,8 +519,19 @@ export function impliedValue(
   const chainMult = 1 + Math.min(model.chain_max_extra, Math.max(0, protocol.chains.length - 1) * model.chain_step);
   const headroomMult = model.headroom_floor + model.headroom_range * (1 - stat.tokened_share);
   const dominanceMult = 1 + model.dominance_step * Math.sqrt(Math.max(0, catShare));
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * peerRatio * sizeMult * momentumMult * maturityMult * chainMult * headroomMult * dominanceMult));
-  return { implied, peerRatio, rawPeerRatio, peerCount, growthPct, relGrowthPct, momentumMult, sizeMult, maturityMult, chainMult, headroomMult, dominanceMult, catMedianChange, catMedianPreToken, catTokenedShare: stat.tokened_share, catShare, age };
+  // Confidence: the two inputs the model cannot see are named, not hidden. A
+  // missing 7d change is scored as 0% growth and a missing listing date as a
+  // 365-day age, so the row can be scored at all — but a guess is not knowledge,
+  // and the row is discounted for each input it does not have: 0.97x for one
+  // missing, 0.94x for both. The discount is small on purpose: it breaks ties
+  // between a guessed row and a measured neighbour without burying a strong
+  // protocol for a gap in the snapshot's record.
+  const missingInputs: string[] = [];
+  if (protocol.change_7d === null) missingInputs.push('7d change');
+  if (age === null) missingInputs.push('listing date');
+  const confidenceMult = missingInputs.length === 0 ? 1 : missingInputs.length === 1 ? model.confidence_missing_one : model.confidence_missing_both;
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * peerRatio * sizeMult * momentumMult * maturityMult * chainMult * headroomMult * dominanceMult * confidenceMult));
+  return { implied, peerRatio, rawPeerRatio, peerCount, growthPct, relGrowthPct, momentumMult, sizeMult, maturityMult, chainMult, headroomMult, dominanceMult, catMedianChange, catMedianPreToken, catTokenedShare: stat.tokened_share, catShare, age, confidenceMult, missingInputs };
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -573,6 +614,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       cat_tokened_share: s.catTokenedShare,
       cat_share: s.catShare,
       age_days: s.age,
+      confidence_multiplier: round4(s.confidenceMult),
+      // missing_inputs names the snapshot inputs the row's score had to guess
+      // (a 7d change, a listing date, or both), so the dashboard can say which.
+      missing_inputs: s.missingInputs,
     },
     farm_steps: farmSteps(s.p, s.age, s.catShare).map(stepText),
   }));
@@ -804,6 +849,8 @@ export function radarRow(row: BoardRow): RadarRow {
     cat_median_pre_token: row.model.cat_median_pre_token,
     cat_tokened_share: row.model.cat_tokened_share,
     cat_share: row.model.cat_share,
+    confidence_multiplier: row.model.confidence_multiplier,
+    missing_inputs: row.model.missing_inputs,
     farm_steps: row.farm_steps,
   };
 }
@@ -827,6 +874,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
+    full_data_rows: board.filter((r) => r.model.missing_inputs.length === 0).length,
     global_peer_ratio: round4(peers.global),
     peer_ratios: peerTable,
     rows: board.map(radarRow),
