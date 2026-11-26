@@ -27,7 +27,24 @@ in `.makefun/owner.json` (the wallet the repo is claimed by).
 - `screenshots/` — board, detail and filtered views
 - `dossier.json` — built with the vendored `vendor/makefun-board.ts`
 
-## The model (radar-5)
+## The model (radar-6)
+
+radar-6 keeps radar-5's scoring and adds a signal-confidence factor: two of
+the model's inputs can be missing from a protocol's record — its 7d change
+(the momentum input) and its listing date (the age input) — and until now a
+missing input was silently replaced by a guess (0% growth, a 365-day age) and
+scored as if it were known. A row with one input missing now carries a 0.97x
+confidence multiplier, a row with both missing 0.94x, and each row records
+which inputs are missing (`missing_inputs`), so a guessed row can no longer
+outrank a fully-measured neighbour on borrowed certainty. The discount is
+small on purpose: it breaks ties between a guessed row and a measured
+neighbour without burying a strong protocol for a gap in the snapshot's
+record. In this snapshot 14 of the 240 board rows carry the 0.97x discount
+(2 missing a 7d change, 12 missing a listing date, none missing both);
+226 rows carry every input. The change moves 26 rows' ranks; rank 1
+(Steakhouse Financial, $710,884,203 implied) is unchanged. The dashboard
+recomputes every row from the same figures, confidence included, and its
+detail drawer names each row's missing inputs.
 
 radar-5 keeps radar-4's scoring exactly and fixes the farm plans, where two
 instructions disagreed with themselves: a DEX plan told the farmer to provide
@@ -54,11 +71,14 @@ peer ratio  = each tokened peer's mcap/TVL clamped to 0.03x–1.20x, then the
 size        = (tvl_usd / $100M) ^ -0.25, clamped to 0.50x–2.00x
 momentum    = 1 + 0.40 x clamp(change_7d, -30, +40) / 100
                   + 0.40 x clamp(change_7d - category PRE-TOKEN median 7d, -30, +40) / 100
+confidence  = 1.00x when the snapshot carries both the 7d change and the
+              listing date, 0.97x when one is missing, 0.94x when both are
 implied     = round( tvl_usd x peer_ratio x size x momentum
               x (0.60 + 0.40 x sqrt(min(age_days, 1460) / 1460))
               x (1 + 0.02 x min(chains - 1, 5))
               x (0.85 + 0.30 x (1 - share of category TVL already tokened))
-              x (1 + 0.10 x sqrt(protocol share of category TVL)) )
+              x (1 + 0.10 x sqrt(protocol share of category TVL))
+              x confidence )
 ```
 
 radar-4 fixes one place where radar-3's code disagreed with its own method:
