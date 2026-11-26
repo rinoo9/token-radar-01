@@ -1,4 +1,4 @@
-// Token Radar (radar-5) entry: Node 22, standard library only.
+// Token Radar (radar-6) entry: Node 22, standard library only.
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores
 // every pre-token protocol with the model in lib/model.ts, writes the ranked board to
@@ -7,6 +7,12 @@
 // make.fun library. The dashboard is a static page, no framework and no network:
 // dashboard/index.html, dashboard/app.css and dashboard/app.js read /output/data.js,
 // which this program writes from the same board.
+//
+// radar-6 keeps radar-5's scoring and adds the model's signal-confidence factor:
+// a row whose snapshot record is missing its 7d change or its listing date is
+// discounted (0.97x for one missing input, 0.94x for both) and names the missing
+// inputs, so a guessed row no longer outranks a fully-measured neighbour on
+// borrowed certainty. See the confidence note in lib/model.ts.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../token-radar-01-kit/input/snapshot.json
@@ -83,7 +89,9 @@ for (const name of shots) {
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
+const discounted = board.filter((r) => r.model.missing_inputs.length > 0).length;
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: ${radar.full_data_rows} rows carry every model input, ${discounted} rows carry a signal-confidence discount for a missing input\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
