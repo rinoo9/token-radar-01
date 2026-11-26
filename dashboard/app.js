@@ -1,4 +1,4 @@
-// Token Radar, radar-5 dashboard. Reads window.RADAR (written beside dashboard/ by
+// Token Radar, radar-6 dashboard. Reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, filters, a per-protocol detail drawer with the
 // model's own inputs and the protocol's farm plan, and the methodology. No network:
 // every byte it shows is in data.js. Farm steps come from data.js, so the page shows
@@ -32,9 +32,11 @@
   }
   // The model in one function, in the same order and arithmetic as lib/model.ts:
   // peer ratio x size x momentum (absolute + relative) x maturity x chains x headroom
-  // x dominance. The row carries the snapshot figures the recompute needs
+  // x dominance x confidence. The row carries the snapshot figures the recompute needs
   // (category median change, tokened share, category share); the stored multipliers
-  // are display only and are never used here.
+  // are display only and are never used here. Confidence is recomputed from the same
+  // gaps the model sees: a missing 7d change or a missing age means an input was
+  // guessed, and the row is discounted 0.97x for one missing input, 0.94x for both.
   function impliedOf(row) {
     var raw = row.change_7d === null || row.change_7d === undefined ? null : row.change_7d;
     var growth = raw === null ? 0 : Math.min(M.growth_cap, Math.max(M.growth_floor, raw));
@@ -46,7 +48,9 @@
     var chainMult = 1 + Math.min(M.chain_max_extra, Math.max(0, (row.chains || []).length - 1) * M.chain_step);
     var headroom = M.headroom_floor + M.headroom_range * (1 - row.cat_tokened_share);
     var dominance = 1 + M.dominance_step * Math.sqrt(Math.max(0, row.cat_share));
-    return Math.max(1, Math.round(row.tvl_usd * row.peer_ratio * size * momentum * maturity * chainMult * headroom * dominance));
+    var missing = (raw === null ? 1 : 0) + (row.age_days === null || row.age_days === undefined ? 1 : 0);
+    var confidence = missing === 0 ? 1 : missing === 1 ? M.confidence_missing_one : M.confidence_missing_both;
+    return Math.max(1, Math.round(row.tvl_usd * row.peer_ratio * size * momentum * maturity * chainMult * headroom * dominance * confidence));
   }
 
   function el(tag, attrs) {
@@ -143,6 +147,7 @@
         el('div', { class: 'fact' }, el('span', { text: 'Pre-token rows scored' }), el('b', { text: String(DATA.board_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Beyond the watchlist' }), el('b', { text: String(DATA.early_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) })),
+        el('div', { class: 'fact' }, el('span', { text: 'Rows with every input on record' }), el('b', { text: String(DATA.full_data_rows) + ' / ' + DATA.board_size })),
         el('div', { class: 'fact' }, el('span', { text: 'Global peer ratio' }), el('b', { text: String(DATA.global_peer_ratio) + 'x TVL' }))
       )
     );
@@ -271,10 +276,11 @@
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked. The peer ratio is the market talking: tokened protocols in the same category, median market cap per dollar of TVL.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x peer_ratio x size x momentum x maturity x chains x headroom x dominance )'
+        'implied = round( tvl_usd x peer_ratio x size x momentum x maturity x chains x headroom x dominance x confidence )'
       ),
       el('p', { class: 'sub', text: 'Peer ratio: each tokened peer\u2019s mcap/TVL is clamped to ' + M.peer_min + 'x-' + M.peer_max + 'x first, so one wild peer cannot set the price (the snapshot\u2019s only Prediction Market peer trades at 400x TVL, Risk Curators\u2019 only peer at 2.98x); the category median is then shrunk toward the global median of ' + DATA.global_peer_ratio + 'x by peer count, (n x category + ' + M.shrink_k + ' x global) / (n + ' + M.shrink_k + '), and clamped again. A thin category now informs its rows instead of collapsing to the global number: Risk Curators is 0.460x on 1 peer, Onchain Capital Allocator 0.140x on 2 peers that agree at 0.006x and 0.019x, CDP 0.191x on 3 peers.' }),
       el('p', { class: 'sub', text: 'Size: (TVL / $' + Math.round(M.size_ref_usd / 1e6) + 'M) ^ -' + M.size_exponent + ', clamped to ' + M.size_min + 'x-' + M.size_max + 'x. The market pays fewer dollars of mcap per dollar of TVL as protocols get bigger — median mcap/TVL falls from 0.65x under $10M to 0.01x over $10B across the 128 priced protocols, a log-log slope near -0.48 — and the model applies half that slope, so the biggest rows are halved and the smallest doubled. Momentum: 1 + ' + M.momentum_abs_weight + ' x clamp(7d growth, ' + M.growth_floor + ', ' + M.growth_cap + ') / 100 + ' + M.momentum_rel_weight + ' x clamp(growth minus the category\u2019s PRE-TOKEN median 7d change, ' + M.rel_floor + ', ' + M.rel_cap + ') / 100, so growing in a shrinking category counts more; the +4448% week in the snapshot is clamped on both terms. The relative term is measured against pre-token protocols only, because a tokened protocol\u2019s TVL moves with its token\u2019s price while a pre-token protocol\u2019s TVL moves with deposits — the old all-protocol median handed every pre-token row in a category a free boost in a week when tokened protocols fell hard. Where no pre-token protocol in a category reports a 7d change, the all-protocol median stands in and the row says so. Maturity: ' + M.maturity_floor + ' + ' + M.maturity_range + ' x sqrt(min(age_days, ' + M.maturity_days + ') / ' + M.maturity_days + '), age being the time since first listing with no token on record; an unlisted age uses ' + M.unknown_age_days + ' days. Chains: 1 + 0.02 x min(chains - 1, 5). Headroom: ' + M.headroom_floor + ' + ' + M.headroom_range + ' x (1 - the share of the category\u2019s TVL that already belongs to tokened protocols), so a category where most value already trades has less launch headroom. Dominance: 1 + ' + M.dominance_step + ' x sqrt(this protocol\u2019s share of its category\u2019s TVL).' }),
+      el('p', { class: 'sub', text: 'Confidence: 1.00x when the snapshot carries both the 7d change and the listing date, ' + M.confidence_missing_one + 'x when one of them is missing, ' + M.confidence_missing_both + 'x when both are. A missing 7d change is still scored as 0% growth and a missing listing date as a ' + M.unknown_age_days + '-day age, so the row can be scored at all — but a guess is not knowledge, and the row is discounted for the input it does not have. The discount is small on purpose: it breaks ties between a guessed row and a measured neighbour without burying a strong protocol for a gap in the snapshot\u2019s record. In this snapshot ' + (DATA.board_size - DATA.full_data_rows) + ' of the ' + DATA.board_size + ' board rows carry a discount, and each one names the inputs it is missing.' }),
       el('p', { class: 'sub', text: 'Stablecoin issuers get no extra discount, by category, never by name: a stablecoin issuer\u2019s TVL is the stablecoins outstanding, which already trade, but its peers\u2019 market caps are their governance tokens\u2019 caps — so the peer ratio already is the market\u2019s price for a stablecoin issuer\u2019s governance token per dollar of stablecoins outstanding (CDP peers: 0.008x, 0.169x, 0.246x). An extra haircut would double-count the discount the peer ratio already carries. Exchanges and versioned pools are not ranked, and above the floor a wrapped, staked or bridged product of a token that already trades is left out: WBTC is Bitcoin on Ethereum, not a launch.' }),
       el('table', { class: 'peer-table' },
         el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Raw peer median' }), el('th', { scope: 'col', text: 'Tokened peers' }), el('th', { scope: 'col', text: 'Ratio used' }))),
@@ -319,6 +325,7 @@
         el('div', null, el('span', { text: 'Chain multiplier (' + (row.chains || []).length + ' chains)' }), el('b', { class: 'num', text: String(row.chain_multiplier) })),
         el('div', null, el('span', { text: 'Headroom (' + Math.round(row.cat_tokened_share * 100) + '% of category TVL already tokened)' }), el('b', { class: 'num', text: String(row.headroom_multiplier) })),
         el('div', null, el('span', { text: 'Dominance (' + (row.cat_share * 100).toFixed(1) + '% of category TVL)' }), el('b', { class: 'num', text: String(row.dominance_multiplier) })),
+        el('div', null, el('span', { text: 'Signal confidence' + ((row.missing_inputs && row.missing_inputs.length) ? ' — ' + row.missing_inputs.join(' + ') + ' missing from the snapshot, so the score used a guess' : ' — every input on record') }), el('b', { class: 'num', text: String(row.confidence_multiplier) + 'x' })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
